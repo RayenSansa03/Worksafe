@@ -1,0 +1,65 @@
+name: iOS build (non signé, pour Sideloadly)
+
+# Construit l'app iPhone sur un Mac GitHub, SANS signature Apple.
+# Le fichier WorkSafe.ipa produit est ensuite signé et installé avec Sideloadly
+# (compte Apple gratuit). Lancer à la main : onglet Actions > Run workflow.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Expo SDK 57 demande Xcode 26.4 ou plus récent.
+      - name: Choisir le Xcode le plus récent
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Installer les dépendances
+        run: npm ci --legacy-peer-deps
+
+      - name: Générer le projet iOS (prebuild)
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Compiler sans signature
+        run: |
+          WORKSPACE=$(ls -d ios/*.xcworkspace | head -1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          echo "Workspace: $WORKSPACE / scheme: $SCHEME"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Fabriquer le .ipa
+        run: |
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          echo "App: $APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry WorkSafe.ipa Payload
+          ls -lh WorkSafe.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WorkSafe-ipa
+          path: WorkSafe.ipa
+          retention-days: 7
